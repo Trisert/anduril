@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anduril"
+version = "0.1.0"
+description = "Minimal agent for OpenAI-compatible endpoints (default: llama.cpp server)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "anduril contributors" }]
+keywords = ["agent", "llm", "openai", "llama.cpp", "tui", "coding-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "openai>=1.0",
+    "rich>=13.0",
+    "pylatexenc>=2.10",
+]
+
+[project.optional-dependencies]
+web = [
+    "ddgs>=5.0",
+    "httpx>=0.27",
+    "trafilatura>=1.6",
+]
+dev = [
+    "ruff>=0.4",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+anduril = "anduril.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example/anduril"
+
+[tool.setuptools]
+packages = [
+    "anduril",
+    "anduril.contrib",
+    "anduril.contrib.skills",
+    "anduril.contrib.skills.web",
+]
+
+[tool.setuptools.package-data]
+"anduril.contrib.skills.web" = ["SKILL.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["__pycache__", "build", "dist"]
+
+[tool.ruff.lint]
+# Start with the essentials: errors (E), pyflakes (F), warnings (W).
+# Add I/B/UP incrementally as the codebase is modernized.
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test_anduril.py"]
+addopts = "-ra --strict-markers"

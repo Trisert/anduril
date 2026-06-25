@@ -1,0 +1,138 @@
+name: CI
+
+# Run lint + test on every push to main and on every pull request. The
+# matrix covers the three Python versions we support. Badges in
+# README.md reflect this workflow's name and the badge URL pattern.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # allow manual runs from the Actions tab
+
+# Cancel in-progress runs for the same branch on a new push. Saves CI
+# minutes when a developer pushes a fix while the previous run is
+# still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # Lint: ruff check + format check. Single Python version is enough
+  # since neither depends on the runtime.
+  # ------------------------------------------------------------------
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install "ruff>=0.4"
+
+      - name: ruff check
+        # E,F,W = pyflakes + pycodestyle + warnings. Matches the
+        # pyproject.toml [tool.ruff.lint] select list.
+        run: ruff check anduril test_anduril.py
+
+      - name: ruff format --check
+        # Style check; doesn't reformat. Surfaces drift between the
+        # committed style and what ruff would prefer.
+        run: ruff format --check anduril test_anduril.py
+
+  # ------------------------------------------------------------------
+  # Test: full pytest suite across the supported Python matrix.
+  # ------------------------------------------------------------------
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't fail the whole matrix on one broken version; the
+      # others can still pass. Set fail-fast to false explicitly
+      # so the matrix coverage is visible on every PR.
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Cache the pip download cache keyed on the lock file
+          # (pyproject.toml) so reinstalls after a no-deps change
+          # are instant.
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with dev + web extras
+        # The web extras are listed so the test suite exercises
+        # the `anduril/contrib/skills/web` import path (the
+        # `import ddgs` inside it raises ImportError on missing
+        # deps; we'd rather see that here than on a user's
+        # machine).
+        run: pip install -e ".[dev,web]"
+
+      - name: Run tests
+        # -ra: summary of all non-passing results at the end.
+        # --strict-markers: unknown marker → error (catches typos
+        # in @pytest.mark.something).
+        # --tb=short: terse tracebacks; the full traceback is in
+        # the artefact if needed.
+        run: python -m pytest -ra --strict-markers --tb=short
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-logs-${{ matrix.python-version }}
+          path: |
+            .pytest_cache/
+            **/__pycache__/
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Build: verify the package can be built into a wheel + sdist
+  # and that the metadata is well-formed. Catches "works on my
+  # machine but the sdist is broken" before a release tag.
+  # ------------------------------------------------------------------
+  build:
+    name: Build (Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tooling
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify metadata
+        # `pip wheel --no-deps` is the fastest way to confirm the
+        # METADATA file is valid; a broken `project.something` in
+        # pyproject.toml surfaces here.
+        run: |
+          pip install twine
+          python -m twine check dist/*
+
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
