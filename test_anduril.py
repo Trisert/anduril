@@ -388,8 +388,8 @@ def test_search_files_finds_matches() -> None:
         (root / "c.txt").write_text("nothing here\n", encoding="utf-8")
         out = search_files.fn(pattern="foo", path=str(root))
         # Both Python files match; the .txt file does not.
-        assert "a.py:1: def foo():" in out
-        assert "b.py:1: # TODO: refactor foo" in out
+        assert "  :1: def foo():" in out
+        assert "  :1: # TODO: refactor foo" in out
         assert "c.txt" not in out
 
 
@@ -399,8 +399,8 @@ def test_search_files_case_insensitive_default() -> None:
         (root / "x.txt").write_text("Hello World\nhello again\n", encoding="utf-8")
         out = search_files.fn(pattern="hello", path=str(root))
         # Both lines match because the default is case-insensitive.
-        assert out.count(":1: Hello World") == 1
-        assert out.count(":2: hello again") == 1
+        assert out.count("  :1: Hello World") == 1
+        assert out.count("  :2: hello again") == 1
 
 
 def test_search_files_case_sensitive() -> None:
@@ -410,8 +410,8 @@ def test_search_files_case_sensitive() -> None:
         out = search_files.fn(
             pattern="Hello", path=str(root), case_sensitive=True,
         )
-        assert ":1: Hello" in out
-        assert ":2: hello" not in out
+        assert "  :1: Hello" in out
+        assert "  :2: hello" not in out
 
 
 def test_search_files_glob_filter() -> None:
@@ -420,7 +420,7 @@ def test_search_files_glob_filter() -> None:
         (root / "a.py").write_text("foo\n", encoding="utf-8")
         (root / "b.txt").write_text("foo\n", encoding="utf-8")
         out = search_files.fn(pattern="foo", path=str(root), glob="*.py")
-        assert "a.py" in out
+        assert "a.py: 1 match" in out
         assert "b.txt" not in out
 
 
@@ -431,7 +431,7 @@ def test_search_files_skips_ignored_dirs() -> None:
         (root / ".git" / "HEAD").write_text("foo\n", encoding="utf-8")
         (root / "src.py").write_text("foo\n", encoding="utf-8")
         out = search_files.fn(pattern="foo", path=str(root))
-        assert "src.py" in out
+        assert "src.py: 1 match" in out
         assert ".git" not in out
 
 

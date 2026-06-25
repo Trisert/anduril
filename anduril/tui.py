@@ -1792,7 +1792,7 @@ class _TUIState:
         stdscr = self.stdscr
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        max_w = max(0, w - 1)
+        max_w = w
 
         # Status bar.
         appr = "yolo" if self.approval_level == "yolo" else (
@@ -1966,11 +1966,16 @@ class _TUIState:
         self._menu_keep_selection()
         menu_lines = self._menu_lines(max_w)
         if menu_lines:
-            # Anchor the menu's bottom row to the editor's separator
-            # line minus one. Cap at the top of the log area.
             box_top = h - ed_h - 1
             menu_bottom = max(log_top, box_top - 1)
             menu_top = max(log_top, menu_bottom - len(menu_lines) + 1)
+            # Clear the background behind the menu first so log text
+            # doesn't bleed through.
+            for r in range(menu_top, menu_bottom + 1):
+                try:
+                    stdscr.addnstr(r, 0, " " * max_w, max_w, self.A_NORMAL)
+                except curses.error:
+                    pass
             for i, spans in enumerate(menu_lines):
                 row = menu_top + i
                 if row > menu_bottom:
@@ -1984,13 +1989,13 @@ class _TUIState:
                     except curses.error:
                         pass
                     col += len(text)
-                # Pad the rest of the row with a blank in the same attr
-                # (matters when the row is REVERSED: we want the whole
-                # row to look like a single highlight).
+                # Pad the rest of the row with spaces in the same attr
+                # so selected (REVERSE) rows have a solid highlight bar.
                 if col < max_w:
                     attr = spans[-1][1] if spans else self.A_NORMAL
                     try:
-                        stdscr.addnstr(row, col, "", max_w - col, attr)
+                        stdscr.addnstr(row, col, " " * (max_w - col),
+                                       max_w - col, attr)
                     except curses.error:
                         pass
 
@@ -2006,6 +2011,12 @@ class _TUIState:
             box_top = h - ed_h - 1
             menu_bottom = max(log_top, box_top - 1)
             menu_top = max(log_top, menu_bottom - len(file_menu_lines) + 1)
+            # Clear the background behind the file menu as well.
+            for r in range(menu_top, menu_bottom + 1):
+                try:
+                    stdscr.addnstr(r, 0, " " * max_w, max_w, self.A_NORMAL)
+                except curses.error:
+                    pass
             for i, spans in enumerate(file_menu_lines):
                 row = menu_top + i
                 if row > menu_bottom:
@@ -2022,11 +2033,10 @@ class _TUIState:
                 if col < max_w:
                     attr = spans[-1][1] if spans else self.A_NORMAL
                     try:
-                        stdscr.addnstr(row, col, "", max_w - col, attr)
+                        stdscr.addnstr(row, col, " " * (max_w - col),
+                                       max_w - col, attr)
                     except curses.error:
                         pass
-
-        # Editor area: a single straight line on top, no box. The first
         # visual row of the first logical line gets a `> ` prompt prefix
         # to mark where the user types.
         box_top = h - ed_h - 1

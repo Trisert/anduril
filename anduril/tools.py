@@ -700,10 +700,20 @@ def search_files(
     """Search files in a directory tree for a substring.
 
     Walks ``path`` (relative to the current working directory, or
-    absolute) and reports every line that contains ``pattern``.
-    Output format is ``relative/path:LINE: matched line``, one
-    per line, so the model can :func:`read_file` the exact
-    location back.
+    absolute) and reports lines that contain ``pattern``,
+    grouped by file.
+
+    Output format::
+
+        relative/path.py: N matches
+          :LINE: matched line
+          :LINE: matched line
+
+        other/file.py: N matches
+          :LINE: matched line
+
+    The file path is shown once per group, saving context when
+    many lines in the same file match.
 
     The search is a plain substring match, not a regex — keeps
     the model from having to escape metacharacters for the
@@ -736,7 +746,8 @@ def search_files(
     # (anduril.files -> anduril.tools is the wrong direction).
     from anduril.files import DEFAULT_IGNORE_DIRS
     needle = pattern if case_sensitive else pattern.lower()
-    out: list[str] = []
+    # Group hits by file path so we don't repeat the path on every line.
+    groups: dict[str, list[tuple[int, str]]] = {}
     seen = 0
     # Iterative walk with a manual stack so we can short-circuit
     # when we hit the result cap, and so a recursive symlink
@@ -777,7 +788,7 @@ def search_files(
                                     rel = entry.relative_to(root.resolve())
                                 except ValueError:
                                     rel = entry
-                                out.append(f"{rel}:{lineno}: {line}")
+                                groups.setdefault(str(rel), []).append((lineno, line))
                                 seen += 1
                                 if seen >= max_results:
                                     break
@@ -785,8 +796,14 @@ def search_files(
                     continue
             if seen >= max_results:
                 break
-    if not out:
+    if not groups:
         return f"no matches for {pattern!r} under {root}"
+    out: list[str] = []
+    for rel_path, hits in groups.items():
+        label = "match" if len(hits) == 1 else "matches"
+        out.append(f"{rel_path}: {len(hits)} {label}")
+        for lineno, line in hits:
+            out.append(f"  :{lineno}: {line}")
     body = "\n".join(out)
     if seen >= max_results:
         body += f"\n\n[... truncated at {max_results} results. Narrow the pattern or pass a more specific `glob` to see more.]"
