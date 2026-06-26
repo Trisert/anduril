@@ -84,9 +84,9 @@ Output format:
 
 
 def _default_tools() -> list[Tool]:
-    from anduril.tools import DEFAULT_FILE_TOOLS, add_mcp_server
+    from anduril.tools import DEFAULT_FILE_TOOLS, add_mcp_server, ask
     tools: list[Tool] = [
-        bash, create_skill, add_mcp_server,
+        bash, create_skill, add_mcp_server, ask,
         *DEFAULT_FILE_TOOLS, *discover_skills(),
     ]
     # MCP servers from pyproject.toml + ANDURIL_MCP_SERVERS env. Failures

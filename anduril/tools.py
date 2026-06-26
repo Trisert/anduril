@@ -963,3 +963,16 @@ def add_mcp_server(
     )
 
 
+@tool
+def ask(question: str, options: list[str] | None = None) -> str:
+    """Ask the user a question to clarify intent or get missing details.
+    Use this when the user's request is ambiguous, you need a preference,
+    or you need information not available in the codebase.
+
+    :param question: The question to display to the user.
+    :param options: Optional list of choices. The last option is always
+        "Type your answer..." for custom input.
+    """
+    raise RuntimeError("ask tool requires a user_input_callback")
+
+

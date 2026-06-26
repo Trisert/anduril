@@ -383,6 +383,7 @@ class Agent:
         _current_agent_module._current = self
         self.model = model
         self.system = system
+        self.goal: str | None = None
         self.max_turns = max_turns
         self.max_retries = max_retries
         self.auto_compress = auto_compress
@@ -400,6 +401,7 @@ class Agent:
             for t in tools
         ]
         self.confirm_callback = confirm_callback
+        self.user_input_callback: Callable[[str, list[str] | None], str] | None = None
         self.interrupt_check = interrupt_check
         self.client = OpenAI(
             base_url=base_url
@@ -656,6 +658,7 @@ class Agent:
         user_message: UserMessage,
         on_event: Optional[Callable[[dict], None]] = None,
         stream: bool = True,
+        tick_callback: Optional[Callable[[], None]] = None,
     ) -> str:
         """Run the agent loop for a single user message. Returns the final content.
 
@@ -744,6 +747,7 @@ class Agent:
                     stream=stream,
                     force_final=force_final,
                     on_event=on_event,
+                    tick_callback=tick_callback,
                 )
             except KeyboardInterrupt:
                 # Let the caller (TUI) handle it — drop the user message we
@@ -881,6 +885,7 @@ class Agent:
         stream: bool = True,
         force_final: bool = False,
         on_event: Optional[Callable[[dict], None]] = None,
+        tick_callback: Optional[Callable[[], None]] = None,
     ) -> tuple[str, str, list[dict]]:
         """Run one model call and return (status, content, tool_calls)."""
         if not stream:
@@ -929,11 +934,53 @@ class Agent:
         interrupted = False
         stream_error: Exception | None = None
 
+        # Stream the response in a daemon thread so the main thread can
+        # poll with a short timeout, calling ``tick_callback`` between
+        # chunks.  Without this the spinner (and Esc-polling) freezes
+        # while the model is thinking between tokens.
+        import queue
+        import threading
+        _chunk_queue: queue.Queue = queue.Queue(maxsize=128)
+        _reader_done = threading.Event()
+
+        def _reader() -> None:
+            try:
+                for chunk in response:
+                    _chunk_queue.put(("chunk", chunk))
+                _chunk_queue.put(("done", None))
+            except Exception as e:
+                _chunk_queue.put(("error", e))
+            finally:
+                _reader_done.set()
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+
         try:
-            for chunk in response:
-                # Esc interruption: poll between chunks.
-                if self.interrupt_check and self.interrupt_check():
-                    interrupted = True
+            while True:
+                try:
+                    kind, payload = _chunk_queue.get(timeout=0.1)
+                except queue.Empty:
+                    if tick_callback:
+                        tick_callback()
+                    # Also check for interrupts during the wait.
+                    if self.interrupt_check and self.interrupt_check():
+                        interrupted = True
+                        close = getattr(response, "close", None)
+                        if close:
+                            try:
+                                close()
+                            except Exception:
+                                pass
+                        # Drain the reader thread.
+                        _reader_done.wait(timeout=5)
+                        break
+                    continue
+
+                if kind == "done":
+                    break
+                if kind == "error":
+                    stream_error = payload
                     close = getattr(response, "close", None)
                     if close:
                         try:
@@ -941,6 +988,8 @@ class Agent:
                         except Exception:
                             pass
                     break
+
+                chunk = payload
 
                 extra = getattr(chunk, "model_extra", None) or {}
                 if "timings" in extra:
@@ -1175,6 +1224,8 @@ class Agent:
         errors = _validate(args, tool.parameters)
         if errors:
             return "error: invalid arguments:\n" + "\n".join(errors)
+        if name == "ask" and self.user_input_callback:
+            return self.user_input_callback(args["question"], args.get("options"))
         if tool.dangerous and self.confirm_callback:
             if not self.confirm_callback(name, args):
                 return "error: user declined to run tool"

@@ -849,6 +849,9 @@ class _TUIState:
         self.MD_H5 = MD_H5
         self.MD_H6 = MD_H6
 
+        # Session / goal
+        self._goal: str | None = None
+
         # Session / metrics
         self.session_id = _new_session_id()
         self.metrics = _Metrics(self.session_id, model=agent.model)
@@ -858,6 +861,9 @@ class _TUIState:
         prior = _load_session(self.session_id)
         if prior:
             self.metrics.load(prior)
+            if prior.get("goal"):
+                self._goal = prior["goal"]
+                self.agent.goal = prior["goal"]
 
         # Scrollable log: (kind, text, attr)
         # Scrollable log: (kind, text, attr)
@@ -940,6 +946,11 @@ class _TUIState:
         # ``_submit_editor``) and on Esc.
         self._edit_in_progress: bool = False
 
+        # Set by ``/goal``. While true, the next ``_submit_editor``
+        # call sets the goal text instead of sending a user message.
+        # Reset on submit (handled in ``_submit_editor``) and on Esc.
+        self._goal_edit_in_progress: bool = False
+
         # Per-turn live stats, so the status bar tracks data during
         # streaming instead of staying frozen until the API reports
         # usage at the end of the response. Updated as deltas arrive
@@ -960,12 +971,14 @@ class _TUIState:
         self.turn_output_tokens: int = 0
         self.turn_t0: float = 0.0
         self.turn_t_first: float | None = None
+        self._spinner_frame: int = 0
 
     def bootstrap(self) -> None:
-        """Wire up the agent's confirm callback now that state exists."""
+        """Wire up the agent's callbacks now that state exists."""
         self.agent.confirm_callback = _make_confirm_callback(
             self.agent, self.stdscr, self.approval_level
         )
+        self.agent.user_input_callback = self._prompt_user
 
     # ----- log / streaming ---------------------------------------------
 
@@ -1120,6 +1133,8 @@ class _TUIState:
         t = _safe_title(first_user)
         if t:
             m["title"] = t
+        if self._goal:
+            m["goal"] = self._goal
         m.update(self.metrics.as_meta())
         return m
 
@@ -1233,9 +1248,13 @@ class _TUIState:
         try:
             # Wire the agent's interrupt_check to a TUI-scoped Esc poller.
             self.agent.interrupt_check = lambda: _poll_esc(self.stdscr)
-            # Agent.run() appends the user message itself; the loop
-            # handles tool calls, recovery nudges, etc.
-            self.agent.run(text, on_event=self.on_event, stream=True)
+
+            def _tick() -> None:
+                self._spinner_frame += 1
+                self.render()
+
+            self.agent.run(text, on_event=self.on_event, stream=True,
+                           tick_callback=_tick)
         except KeyboardInterrupt:
             self.push("note", "(interrupted)", self.A_DIM)
             # Drop the user turn if it's still at the end.
@@ -1317,7 +1336,13 @@ class _TUIState:
         self.render()
         try:
             self.agent.interrupt_check = lambda: _poll_esc(self.stdscr)
-            self.agent.run(parts, on_event=self.on_event, stream=True)
+
+            def _tick() -> None:
+                self._spinner_frame += 1
+                self.render()
+
+            self.agent.run(parts, on_event=self.on_event, stream=True,
+                           tick_callback=_tick)
         except KeyboardInterrupt:
             self.push("note", "(interrupted)", self.A_DIM)
             if (self.agent._messages
@@ -1443,6 +1468,7 @@ class _TUIState:
                     subsequent_indent=" " * len(prefix),
                     break_long_words=True,
                     break_on_hyphens=False,
+                    drop_whitespace=False,
                 )
             except ValueError:
                 wrapped = [indent + raw]
@@ -1846,8 +1872,10 @@ class _TUIState:
             # of the request we just sent; the output ticks up per
             # delta; the cache portion is unknown until the API
             # reports it.
+            spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self._spinner_frame % 10]
+            self._spinner_frame += 1
             status = (
-                f"anduril · {self.agent.model} · {appr} · "
+                f"{spinner} anduril · {self.agent.model} · {appr} · "
                 f"turn ctx {_abbr(self.turn_prompt_tokens)}{cached_str} · "
                 f"out {_abbr(self.turn_output_tokens)} · "
                 f"ses {out_session}{tok_per_sec}{cost_str}"
@@ -2110,6 +2138,71 @@ class _TUIState:
             pass
         stdscr.refresh()
 
+    def _prompt_user(self, question: str, options: list[str] | None = None) -> str:
+        """Blocking text prompt shown in the TUI. Returns the user's answer."""
+        self.push("note", f"  ┌─ Ask from agent: {question}", self.A_BOLD)
+        if options:
+            for i, opt in enumerate(options, 1):
+                self.push("note", f"  │   {i}. {opt}", self.A_NORMAL)
+            self.push("note", f"  │   {len(options) + 1}. Type your answer...", self.A_NORMAL)
+
+        saved_buf = list(self.editor.buf)
+        saved_row = self.editor.row
+        saved_col = self.editor.col
+        self.editor.buf = [""]
+        self.editor.row = 0
+        self.editor.col = 0
+        self.render()
+
+        buf: list[str] = []
+        prompt_text = "  └─ " if not options else f"  └─ Select [1-{len(options) + 1}]: "
+
+        h, w = self.stdscr.getmaxyx()
+        row = max(0, h - 3)
+        try:
+            while True:
+                try:
+                    self.stdscr.addnstr(row, 0, " " * max(0, w - 1), max(0, w - 1), curses.A_BOLD)
+                    display = prompt_text + "".join(buf) + "▊"
+                    self.stdscr.addnstr(row, 0, display, max(0, w - 1), curses.A_BOLD)
+                    self.stdscr.refresh()
+                except curses.error:
+                    pass
+                try:
+                    ch = self.stdscr.get_wch()
+                except KeyboardInterrupt:
+                    raise
+                except curses.error:
+                    continue
+                if isinstance(ch, str):
+                    if ch == "\n" or ch == "\r":
+                        answer = "".join(buf)
+                        if options:
+                            try:
+                                n = int(answer)
+                                if 1 <= n <= len(options):
+                                    answer = options[n - 1]
+                                elif n == len(options) + 1:
+                                    answer = ""
+                            except ValueError:
+                                pass
+                        self.push("note", f"  └─ {answer}" if answer else "  └─ (cancelled)", self.A_CYAN)
+                        return answer
+                    if ch == "\x1b":
+                        return ""
+                    if ch in ("\x7f", "\b"):
+                        if buf:
+                            buf.pop()
+                    elif ch == "\x03":
+                        raise KeyboardInterrupt
+                    elif ch.isprintable():
+                        buf.append(ch)
+        finally:
+            self.editor.buf = saved_buf
+            self.editor.row = saved_row
+            self.editor.col = saved_col
+            self.render()
+
     # ----- command dispatch -------------------------------------------
 
     def _cmd_quit(self, _arg: str) -> None:
@@ -2139,6 +2232,11 @@ class _TUIState:
         self.turn_t0 = 0.0
         self.turn_t_first = None
         self.agent.last_turn_usage = None
+        # Reset goal for the new session.
+        self._goal = None
+        self.agent.goal = None
+        # Re-wire user input callback for the new session.
+        self.agent.user_input_callback = self._prompt_user
         # Reset short-reference attachments. The pasted image
         # files themselves are kept on disk (under
         # ~/.local/state/anduril/images/) in case the user
@@ -2370,6 +2468,53 @@ class _TUIState:
         self._edit_in_progress = True
         return "  edit the message above and press Enter to submit (Esc to cancel)"
 
+    def _set_goal(self, text: str) -> None:
+        self._goal = text
+        self.agent.goal = text
+        # Inject the goal as a permanent system message in _messages
+        goal_msg = {"role": "system", "content": f"Goal: {text}"}
+        if self.agent._messages and self.agent._messages[0].get("role") == "system":
+            for i, msg in enumerate(self.agent._messages):
+                if isinstance(msg.get("content"), str) and msg["content"].startswith("Goal: "):
+                    self.agent._messages[i] = goal_msg
+                    break
+            else:
+                self.agent._messages.insert(1, goal_msg)
+        else:
+            self.agent._messages.insert(0, goal_msg)
+        # Push a note and fire a standalone turn so the model sees the goal immediately.
+        self.push("note", f"  goal set to: {text}", self.A_DIM)
+        self.render()
+        self.run_agent_turn(text)
+
+    def _clear_goal(self) -> str:
+        self._goal = None
+        self.agent.goal = None
+        # Remove the goal system message from _messages
+        if self.agent._messages:
+            self.agent._messages[:] = [
+                m for m in self.agent._messages
+                if not (isinstance(m.get("content"), str) and m["content"].startswith("Goal: "))
+            ]
+        return "  goal cleared"
+
+    def _cmd_goal(self, arg: str) -> str | None:
+        arg = (arg or "").strip()
+
+        if not arg:
+            current = self._goal or ""
+            self.editor.buf = current.split("\n")
+            self.editor.row = len(self.editor.buf) - 1
+            self.editor.col = len(self.editor.buf[-1])
+            self._goal_edit_in_progress = True
+            return "  edit the goal above and press Enter to confirm (Esc to cancel)"
+
+        if arg.lower() in ("clear", "off"):
+            return self._clear_goal()
+
+        self._set_goal(arg)
+        return None
+
     def _cmd_autocompress(self, arg: str) -> str:
         """Toggle the per-turn auto-compression trigger.
 
@@ -2491,6 +2636,8 @@ class _TUIState:
                                 lambda s, a: s._cmd_attachments(a)),
         "mcp":       _Command("list connected MCP servers and their tools",
                                 lambda s, a: s._cmd_mcp(a)),
+        "goal":     _Command("show, set, or clear the session goal (/goal [clear])",
+                                lambda s, a: s._cmd_goal(a)),
         "cost":      _Command("show per-model cost breakdown for the session",
                                 lambda s, a: s._cmd_cost(a)),
         "budget":    _Command("show or set a session cost cap (/budget [usd|off|+/-])",
@@ -3226,6 +3373,18 @@ class _TUIState:
         if text.startswith("/"):
             self._handle_command(text)
             return
+
+        if self._goal_edit_in_progress:
+            self._goal_edit_in_progress = False
+            self.editor.buf = [""]
+            self.editor.row = 0
+            self.editor.col = 0
+            if text:
+                self._set_goal(text)
+            else:
+                self.render()
+            return
+
         # ``/edit`` pre-fills the editor with the previous user
         # message and sets this flag. The submission is a
         # *replacement*, not a new turn — undo the previous
@@ -3357,6 +3516,14 @@ class _TUIState:
                         return
                     if self._menu_active():
                         self.menu_selected = 0
+                        return
+                    if self._goal_edit_in_progress:
+                        self._goal_edit_in_progress = False
+                        self.editor.buf = [""]
+                        self.editor.row = 0
+                        self.editor.col = 0
+                        self.push("note", "  goal unchanged", self.A_DIM)
+                        self.render()
                         return
                     if self._edit_in_progress:
                         # Cancel the edit. The previous turn is
