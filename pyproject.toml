@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "openai>=1.0",
     "rich>=13.0",
+    "textual>=1.0",
     "pylatexenc>=2.10",
 ]
 
@@ -49,6 +50,8 @@ Homepage = "https://github.com/example/anduril"
 [tool.setuptools]
 packages = [
     "anduril",
+    "anduril.tui_textual",
+    "anduril.tui_textual.widgets",
     "anduril.contrib",
     "anduril.contrib.skills",
     "anduril.contrib.skills.web",

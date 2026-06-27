@@ -29,13 +29,13 @@ from anduril.env import _env_bool, _env_float
 # === Tunables =============================================================
 
 #: Fraction of the model's context window at which we trigger auto-
-#: compression. 0.8 means "compress when the prompt reaches 80% of
+#: compression. 0.75 means "compress when the prompt reaches 75% of
 #: the window". Leave headroom for the model's response (max_tokens),
 #: the tool schemas, and the next user message.
 #:
 #: Set ``ANDURIL_CONTEXT_FRACTION=0.5`` for an aggressive policy,
 #: ``ANDURIL_CONTEXT_FRACTION=0.95`` for a permissive one.
-DEFAULT_CONTEXT_FRACTION: float = _env_float("ANDURIL_CONTEXT_FRACTION", 0.8)
+DEFAULT_CONTEXT_FRACTION: float = _env_float("ANDURIL_CONTEXT_FRACTION", 0.75)
 
 #: Master switch. ``ANDURIL_AUTO_COMPRESS=0`` disables the trigger
 #: entirely (manual ``/compress`` still works).

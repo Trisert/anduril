@@ -14,12 +14,14 @@
         python = pkgs.python3.withPackages (ps: [
           ps.openai
           ps.rich
+          ps.textual
           ps.pylatexenc
         ]);
         # Dev shell adds lint, test, and the optional web-skill deps.
         pythonDev = pkgs.python3.withPackages (ps: [
           ps.openai
           ps.rich
+          ps.textual
           ps.pylatexenc
           ps.ruff
           ps.pytest

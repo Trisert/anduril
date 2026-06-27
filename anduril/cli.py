@@ -136,13 +136,16 @@ def _build_agent(args: argparse.Namespace) -> Agent:
     system = args.system or os.environ.get("ANDURIL_SYSTEM")
     if not system:
         system = DEFAULT_SYSTEM
-    return Agent(
+    agent = Agent(
         model=args.model or os.environ.get("ANDURIL_MODEL", "local"),
         system=system,
         base_url=args.base_url or os.environ.get("ANDURIL_BASE_URL"),
         tools=tuple(_default_tools()),
         history_path=args.history or os.environ.get("ANDURIL_HISTORY"),
     )
+    if agent.model == "local":
+        agent.fetch_model_from_server()
+    return agent
 
 
 def _print_session_list(sessions: list[dict], start_index: int = 1,
@@ -331,6 +334,16 @@ def main() -> None:
         help="(legacy) mark bash as dangerous — the default is now True",
     )
     parser.add_argument(
+        "--tui", default=os.environ.get("ANDURIL_TUI", "textual"),
+        choices=("textual", "curses"),
+        help="TUI backend: textual (default) or curses (ANDURIL_TUI)",
+    )
+    parser.add_argument(
+        "--ask-ui", default=os.environ.get("ANDURIL_ASK_UI", "textual"),
+        choices=("textual", "curses"),
+        help="Ask tool UI backend (only with --tui curses) (ANDURIL_ASK_UI)",
+    )
+    parser.add_argument(
         "--prompt", "-p", default=None,
         help="one-shot mode: run this single prompt, print the response, and exit "
              "(useful for scripting and for the agent to call itself: "
@@ -339,6 +352,14 @@ def main() -> None:
     args = parser.parse_args()
 
     agent = _build_agent(args)
+
+    # Wire the ask-tool UI backend (only relevant for curses TUI).
+    if args.tui == "curses" and args.ask_ui == "textual":
+        try:
+            from anduril.tui_textual.ask_bridge import prompt_user as _textual_ask
+            agent.user_input_callback = _textual_ask
+        except Exception:
+            pass  # fall through to curses _prompt_user
 
     # Optional resume.
     if args.resume is not None:
@@ -373,7 +394,11 @@ def main() -> None:
         _plain_repl(agent)
         return
 
-    tui(agent)
+    if args.tui == "textual":
+        from anduril.tui_textual.app import AndurilApp
+        AndurilApp(agent).run()
+    else:
+        tui(agent)
 
 
 def _plain_repl(agent: Agent) -> None:

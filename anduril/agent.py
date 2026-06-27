@@ -419,6 +419,20 @@ class Agent:
         if self.system:
             self._messages.append({"role": "system", "content": self.system})
         self._metrics: Optional[_Metrics] = None
+
+    def fetch_model_from_server(self) -> None:
+        """Query /v1/models to discover the real model name from the server.
+
+        Silently does nothing on failure (server not reachable, etc.).
+        """
+        try:
+            models = self.client.models.list()
+            for m in models:
+                if m.id and m.id != self.model:
+                    self.model = m.id
+                    break
+        except Exception:
+            pass
         # Per-turn usage for the most recent model call. The TUI
         # reads this after a turn completes to replace the rough
         # char-based live estimate with the API-reported ground

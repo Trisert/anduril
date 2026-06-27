@@ -979,6 +979,11 @@ class _TUIState:
             self.agent, self.stdscr, self.approval_level
         )
         self.agent.user_input_callback = self._prompt_user
+        if self.agent.model == "local":
+            prev = self.agent.model
+            self.agent.fetch_model_from_server()
+            if self.agent.model != prev:
+                self.push("note", f"  Model resolved: {self.agent.model}", self.A_DIM)
 
     # ----- log / streaming ---------------------------------------------
 
